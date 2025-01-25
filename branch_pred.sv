@@ -1,55 +1,45 @@
 module branch_pred (
-    input logic clk, rstn,branch_taken,is_branch_prev,
-    input logic [31:0] epc,fpc,
+    input logic clk, rstn, branch_taken, is_branch_prev,
+    input logic [31:0] epc, fpc,
     output logic pred
-);  
+);
 
-logic [2:0] LHT [7:0];
-logic [1:0] LPT [7:0];
-logic [2:0] pLHT_val,nLHT_val;
-logic [2:0] pLHT_index,nLHT_index;
-logic [1:0] pLPT_val,nLPT_val;
-logic [2:0] pindex,nindex;
+    // Global history register (stores the last few branch outcomes)
+    logic [7:0] global_history;  // 8-bit global history register for branch outcomes
+    logic [1:0] global_prediction; // 2-bit prediction from global history
+    logic [2:0] global_index;  // Index for global history lookup (derived from global history)
 
-// Get the index of the LHT
-assign pindex = epc[4:2];
-assign pLHT_val = LHT[pindex];
-assign pLHT_index=pLHT_val;
-assign pLPT_val = LPT[pLHT_index];
+    // 2-bit saturating counter table for branch prediction
+    logic [1:0] prediction_table [7:0];
 
-assign nindex=fpc[4:2];
-assign nLHT_val = LHT[nindex];
-assign nLPT_val = LPT[nLHT_index];
-assign nLHT_index=nLHT_val;
+    // Generate global index from global history
+    assign global_index = global_history[7:5];  // Use the upper 3 bits for the index (or a subset of bits)
+    assign global_prediction = prediction_table[global_index];
 
-assign pred = ((nLPT_val == 2'b00) |(nLPT_val ==2'b01 )) ? 1'b0 : 1'b1;
+    // Branch prediction output
+    assign pred = (global_prediction == 2'b00 || global_prediction == 2'b01) ? 1'b0 : 1'b1;
 
-// Always block to update the LHT and LPT
-always_ff @(posedge clk or negedge rstn) begin
-    if (!rstn) begin
-        // Loop through each entry and set them to zeros
-        for (int i = 0; i < 8; i++) begin
-            LHT[i] <= 3'b000;
-            LPT[i] <= 2'b11;		// initially predict taken
+    // Always block to update global history and prediction table
+    always_ff @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            // Reset the global history and prediction table
+            global_history <= 8'b0; // Reset history to zero
+            for (int i = 0; i < 8; i++) begin
+                prediction_table[i] <= 2'b11; // Initialize to strongly taken
+            end
+        end else if (is_branch_prev) begin
+            // Update the global history with the new branch outcome
+            global_history <= {global_history[6:0], branch_taken}; // Shift in the latest branch outcome
+
+            // Update the prediction table using saturating counters
+            if (branch_taken) begin
+                // Increment the counter if the branch was taken, but not beyond 2'b11 (strongly taken)
+                prediction_table[global_index] <= (prediction_table[global_index] == 2'b11) ? 2'b11 : prediction_table[global_index] + 1;
+            end else begin
+                // Decrement the counter if the branch was not taken, but not below 2'b00 (strongly not taken)
+                prediction_table[global_index] <= (prediction_table[global_index] == 2'b00) ? 2'b00 : prediction_table[global_index] - 1;
+            end
         end
-    end else if (is_branch_prev) begin
-			  // Update the LPT of previous branch
-			  if(pLPT_val == 2'b00) begin
-					LPT[pLHT_index] <= branch_taken ? 2'b01 : 2'b00;
-			  end else if (pLPT_val == 2'b01) begin
-					LPT[pLHT_index] <= branch_taken ? 2'b11 : 2'b00;
-			  end else if (pLPT_val == 2'b10) begin
-					LPT[pLHT_index] <= branch_taken ? 2'b11 : 2'b00;
-			  end else begin
-					LPT[pLHT_index] <= branch_taken ? 2'b11 : 2'b10;
-			  end
-
-			  // Update the LHT of previous branch
-			  LHT[pindex] <= {branch_taken,pLHT_val[2:1]};
     end
-
-end
-
-
 
 endmodule
